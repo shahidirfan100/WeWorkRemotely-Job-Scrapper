@@ -22,6 +22,52 @@ const cleanText = (html) => {
     return $.root().text().replace(/\s+/g, ' ').trim();
 };
 
+// Helper: sanitize description HTML
+// - Keeps only text-related tags: p, br, strong, b, em, i, ul, ol, li, a
+// - Removes scripts, styles, JS, CSS, meta, etc.
+// - Strips all attributes except href on <a>
+const sanitizeDescriptionHtml = (html) => {
+    if (!html) return null;
+
+    const rootWrapper = '<div id="__root__"></div>';
+    const $ = cheerioLoad(rootWrapper);
+    const root = $('#__root__');
+    root.html(html);
+
+    // Remove non-content elements
+    root.find('script, style, noscript, iframe, canvas, svg, form, button, input, select, textarea, meta, link, head, title').remove();
+
+    const ALLOWED_TAGS = new Set(['p', 'br', 'strong', 'b', 'em', 'i', 'ul', 'ol', 'li', 'a']);
+
+    // Walk all elements and unwrap non-allowed tags
+    root.find('*').each((_, el) => {
+        const tag = (el.tagName || el.name || '').toLowerCase();
+
+        if (!ALLOWED_TAGS.has(tag)) {
+            // Replace element with its children (keep text flow)
+            const $el = $(el);
+            $el.replaceWith($el.contents());
+            return;
+        }
+
+        // Strip attributes except href on <a>
+        const attribs = el.attribs || {};
+        for (const name of Object.keys(attribs)) {
+            if (!(tag === 'a' && name.toLowerCase() === 'href')) {
+                $(el).removeAttr(name);
+            }
+        }
+    });
+
+    let result = root.html() || '';
+    result = result.trim();
+
+    // Normalize whitespace a bit
+    result = result.replace(/\s+\n/g, '\n').replace(/\n\s+/g, '\n');
+
+    return result || null;
+};
+
 // Helper: salary parser
 const parseSalary = (raw) => {
     if (!raw && raw !== 0) {
@@ -47,8 +93,9 @@ const parseSalary = (raw) => {
 
     // Currency detection
     let currency = null;
-    const currencyMatch = text.match(/\b(USD|EUR|GBP|CAD|AUD|CHF|JPY)\b/i)
-        || text.match(/[$€£¥]/);
+    const currencyMatch =
+        text.match(/\b(USD|EUR|GBP|CAD|AUD|CHF|JPY)\b/i) ||
+        text.match(/[$€£¥]/);
 
     if (currencyMatch) {
         const cur = currencyMatch[1] || currencyMatch[0];
@@ -189,15 +236,21 @@ const extractFromJsonLd = ($) => {
                     const loc = Array.isArray(e.jobLocation) ? e.jobLocation[0] : e.jobLocation;
                     const addr = loc && loc.address;
                     if (addr) {
-                        location = addr.addressLocality || addr.addressRegion || addr.addressCountry || null;
+                        location =
+                            addr.addressLocality ||
+                            addr.addressRegion ||
+                            addr.addressCountry ||
+                            null;
                     }
                 }
+
+                const descHtml = e.description ? sanitizeDescriptionHtml(e.description) : null;
 
                 return {
                     title: e.title || e.name || null,
                     company: e.hiringOrganization?.name || null,
                     date_posted: e.datePosted || null,
-                    description_html: e.description || null,
+                    description_html: descHtml,
                     location: location,
                     salary_text: salaryText,
                     job_type: e.employmentType || null,
@@ -351,20 +404,23 @@ await Actor.main(async () => {
                     // TITLE
                     if (!data.title) {
                         data.title =
-                            $('h1').first().text().trim()
-                            || $('h2.title').first().text().trim()
-                            || $('.listing-header-container h1').first().text().trim()
-                            || null;
+                            $('h1').first().text().trim() ||
+                            $('h2.title').first().text().trim() ||
+                            $('.listing-header-container h1').first().text().trim() ||
+                            $('.listing-header h1').first().text().trim() ||
+                            null;
                     }
 
                     // COMPANY
                     if (!data.company) {
                         data.company =
-                            $('.listing-header-container h2').first().text().trim()
-                            || $('a[href*="/company/"]').first().text().trim()
-                            || $('.company h2').first().text().trim()
-                            || $('.company-name').first().text().trim()
-                            || null;
+                            $('.listing-header-container h2').first().text().trim() ||
+                            $('.listing-header-container .company').first().text().trim() ||
+                            $('.company h2').first().text().trim() ||
+                            $('.company-name').first().text().trim() ||
+                            $('a[href*="/company/"]').first().text().trim() ||
+                            $('[class*="company"]').first().text().trim() ||
+                            null;
                     }
 
                     // DESCRIPTION HTML
@@ -373,51 +429,89 @@ await Actor.main(async () => {
                             $('.listing-container--description').first();
                         if (!desc || !desc.length) {
                             desc =
-                                $('.listing-container').first()
-                                || $('#job-description').first()
-                                || $('[class*="job-description"]').first()
-                                || $('.description').first();
+                                $('.listing-container .listing-body').first() ||
+                                $('.listing-container').first() ||
+                                $('#job-description').first() ||
+                                $('[data-id="job-description"]').first() ||
+                                $('[class*="job-description"]').first() ||
+                                $('.description').first();
                         }
                         if (!desc || !desc.length) {
                             desc = $('article').first();
                         }
-                        data.description_html = desc && desc.length ? String(desc.html()).trim() : null;
+
+                        if (desc && desc.length) {
+                            const rawHtml = String(desc.html() || '').trim();
+                            data.description_html = sanitizeDescriptionHtml(rawHtml);
+                        } else {
+                            data.description_html = null;
+                        }
+                    } else {
+                        // Ensure JSON-LD description is sanitized too
+                        data.description_html = sanitizeDescriptionHtml(data.description_html);
                     }
 
-                    // DESCRIPTION TEXT
+                    // DESCRIPTION TEXT (always derived from sanitized HTML)
                     data.description_text = data.description_html ? cleanText(data.description_html) : null;
 
                     // LOCATION
                     if (!data.location) {
                         data.location =
-                            $('.region').first().text().trim()
-                            || $('[class*="location"]').first().text().trim()
-                            || 'Remote';
+                            $('.region').first().text().trim() ||
+                            $('[class*="location"]').first().text().trim() ||
+                            'Remote';
                     }
 
                     // DATE POSTED
                     if (!data.date_posted) {
-                        const timeEl = $('.listing-header-container time, time').first();
-                        const datetime = timeEl.attr('datetime');
-                        const timeText = timeEl.text().trim();
-                        data.date_posted = datetime || timeText || null;
+                        let datePosted = null;
+
+                        // 1) time element with datetime
+                        const timeEl =
+                            $('.listing-header-container time').first().attr('datetime') ||
+                            $('time').first().attr('datetime');
+                        if (timeEl) {
+                            datePosted = timeEl.trim();
+                        }
+
+                        // 2) time element text
+                        if (!datePosted) {
+                            const timeText =
+                                $('.listing-header-container time').first().text().trim() ||
+                                $('time').first().text().trim();
+                            if (timeText) datePosted = timeText;
+                        }
+
+                        // 3) meta tags as fallback
+                        if (!datePosted) {
+                            const metaDate =
+                                $('meta[property="article:published_time"]').attr('content') ||
+                                $('meta[name="date"]').attr('content') ||
+                                null;
+                            if (metaDate) datePosted = metaDate.trim();
+                        }
+
+                        data.date_posted = datePosted || null;
                     }
 
                     // JOB TYPE
                     if (!data.job_type) {
                         data.job_type =
-                            $('.listing-tag').first().text().trim()
-                            || $('[class*="tag"]').first().text().trim()
-                            || null;
+                            $('.listing-header-container .listing-tag').first().text().trim() ||
+                            $('.listing-tag').first().text().trim() ||
+                            $('ul.listing-tags li').first().text().trim() ||
+                            $('[class*="employment"]').first().text().trim() ||
+                            $('[class*="job-type"]').first().text().trim() ||
+                            null;
                     }
 
                     // SALARY
                     let salaryText = data.salary_text || null;
                     if (!salaryText) {
                         const salaryDom =
-                            $('.compensation').first().text().trim()
-                            || $('[class*="salary"]').first().text().trim()
-                            || null;
+                            $('.compensation').first().text().trim() ||
+                            $('[class*="salary"]').first().text().trim() ||
+                            null;
                         salaryText = salaryDom || null;
                     }
 
@@ -425,9 +519,9 @@ await Actor.main(async () => {
 
                     // CATEGORY
                     const jobCategory =
-                        $('.listing-header-container a[href*="/categories/"]').first().text().trim()
-                        || category
-                        || null;
+                        $('.listing-header-container a[href*="/categories/"]').first().text().trim() ||
+                        category ||
+                        null;
 
                     const item = {
                         title: data.title || null,
