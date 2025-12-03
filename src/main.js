@@ -25,6 +25,16 @@ const cleanText = (html) => {
     return $.root().text().replace(/\s+/g, ' ').trim();
 };
 
+// Decode HTML entities (handles &lt;div&gt; etc)
+const decodeHtmlEntities = (value) => {
+    if (value == null) return '';
+    // Cheerio will decode when reading as text
+    const $ = cheerioLoad('<div></div>');
+    const node = $('div');
+    node.html(String(value));
+    return node.text();
+};
+
 // Keep only text-related tags in description_html
 // Allowed: p, br, strong, b, em, i, ul, ol, li, a
 const sanitizeDescriptionHtml = (html) => {
@@ -295,6 +305,19 @@ const findNextPage = (currentUrl, currentPageNo) => {
 
 // Extract company name with heuristics (fixes "We're Walter!" case)
 const extractCompany = ($, title) => {
+    const cleanCompanyName = (name) => {
+        if (!name) return null;
+        let n = decodeHtmlEntities(name).replace(/\s+/g, ' ').trim();
+        n = n.replace(/\?.*$/, ''); // drop query params
+        n = n.replace(/\[.*?\]/g, '').trim(); // drop bracketed noise
+        // If UTM-like tokens appear, keep text before them
+        const utmSplit = n.split(/utm[_\- ]/i)[0].trim();
+        if (utmSplit && utmSplit.length >= 2) n = utmSplit;
+        // Clip very long strings
+        if (n.length > 120) n = n.slice(0, 120).trim();
+        return n || null;
+    };
+
     // 1) Prefer clean, explicit selectors
     const selectors = [
         'a[href*="/company/"]',
@@ -306,12 +329,14 @@ const extractCompany = ($, title) => {
         '.job-company',
         '.company-card h3',
         '.company-card h2',
+        'div.lis-container__job__sidebar__companyDetails__info__title',
     ];
 
     for (const sel of selectors) {
         const txt = $(sel).first().text().replace(/\s+/g, ' ').trim();
         if (txt && txt.length <= 80) {
-            return txt;
+            const cleaned = cleanCompanyName(txt);
+            if (cleaned) return cleaned;
         }
     }
 
@@ -328,7 +353,7 @@ const extractCompany = ($, title) => {
                 .filter(Boolean)
                 .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
                 .join(' ');
-            if (name) return name;
+            if (name) return cleanCompanyName(name);
         }
     }
 
@@ -343,7 +368,10 @@ const extractCompany = ($, title) => {
         const m = String(mt)
             .replace(/\s+/g, ' ')
             .match(/\bat\s+([A-Z][A-Za-z0-9 .,&\-]{1,80})/i);
-        if (m && m[1]) return m[1].trim();
+        if (m && m[1]) {
+            const cleaned = cleanCompanyName(m[1]);
+            if (cleaned) return cleaned;
+        }
     }
 
     // 2) Fallback: parse from header text
@@ -410,9 +438,21 @@ const extractDatePosted = ($, jsonDate) => {
         null;
     if (metaDate && metaDate.trim()) return metaDate.trim();
 
+    // 5) Sidebar list item e.g., lis-container__job__sidebar__job-about__list__item
+    const sidebarDate = $('li.lis-container__job__sidebar__job-about__list__item')
+        .filter((_, el) => /posted/i.test($(el).text()))
+        .first()
+        .text()
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (sidebarDate) {
+        const cleaned = sidebarDate.replace(/^Posted[:\s]*/i, '').trim();
+        if (cleaned) return `Posted ${cleaned}`;
+    }
+
     // 5) Generic "Posted ..." anywhere in body text
     const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
-    const looseMatch = bodyText.match(/Posted\s+(on\s+)?([^•|]+?)(?:\s+(Apply|Job type|Category|Region|$))/i);
+    const looseMatch = bodyText.match(/Posted\s+(on\s+)?([A-Za-z0-9 ,:-]{3,40}?(?:ago|[0-9]{4}|[A-Za-z]{3,9}\s+\d{1,2}))/i);
     if (looseMatch && looseMatch[2]) return `Posted ${looseMatch[2].trim()}`;
 
     return null;
@@ -442,6 +482,13 @@ const extractJobType = ($, jsonJobType) => {
     $('[class*="employment"], [class*="job-type"]').each((_, el) => {
         const t = cheerioLoad(el).root().text().replace(/\s+/g, ' ').trim();
         if (t) pieces.add(t);
+    });
+
+    // Sidebar list items may contain "Job type"
+    $('li.lis-container__job__sidebar__job-about__list__item').each((_, el) => {
+        const text = $(el).text().replace(/\s+/g, ' ').trim();
+        const match = text.match(/Job type[:\-\s]*([A-Za-z/ &\-]{3,60})/i);
+        if (match && match[1]) pieces.add(match[1].trim());
     });
 
     // Elements with explicit label "Job type"
@@ -517,6 +564,43 @@ const extractOverviewMeta = ($) => {
     return { jobType, datePosted };
 };
 
+// Normalize/clean job_type to avoid noisy strings
+const normalizeJobType = (raw) => {
+    if (!raw) return null;
+    const text = decodeHtmlEntities(String(raw));
+    const candidates = new Set();
+
+    // Split by common separators
+    text.split(/[\|,/•]+/).forEach((piece) => {
+        const trimmed = piece.replace(/\s+/g, ' ').trim();
+        if (trimmed) candidates.add(trimmed);
+    });
+
+    const KEYWORDS = /(full[\s-]?time|part[\s-]?time|contract|freelance|temporary|intern(ship)?|permanent|gig|project)/i;
+    const filtered = [...candidates].filter((c) => KEYWORDS.test(c));
+
+    if (filtered.length === 1) return filtered[0];
+    if (filtered.length > 1) return filtered.join(' | ');
+
+    // Try to extract keyword from the whole text
+    const match = text.match(KEYWORDS);
+    if (match) return match[0];
+
+    return null;
+};
+
+// Extract skills/labels from skill boxes
+const extractSkills = ($) => {
+    const skills = [];
+    // common pattern: div.boxes .box
+    $('div.boxes .box, div.boxes span, div.boxes a').each((_, el) => {
+        const t = $(el).text().replace(/\s+/g, ' ').trim();
+        if (t) skills.push(t);
+    });
+
+    return skills.length ? [...new Set(skills)] : null;
+};
+
 // Pick best description container (longest sanitized text)
 const extractBestDescriptionHtml = ($) => {
     const selectors = [
@@ -536,6 +620,7 @@ const extractBestDescriptionHtml = ($) => {
         '.listing-page__content',
         '.job-page',
         '.job-posting',
+        'div.lis-container__job__content__description',
         'section:contains("About the job")',
         'section:contains("Job Description")',
         'section:contains("About the role")',
@@ -550,8 +635,13 @@ const extractBestDescriptionHtml = ($) => {
         const el = $(sel).first();
         if (!el || !el.length) continue;
 
-        const raw = String(el.html() || '').trim();
+        let raw = String(el.html() || '').trim();
         if (!raw) continue;
+
+        // Some pages store encoded HTML inside nodes
+        if (/&lt;.+&gt;/.test(raw)) {
+            raw = decodeHtmlEntities(raw);
+        }
 
         const sanitized = sanitizeDescriptionHtml(raw);
         if (!sanitized) continue;
@@ -741,15 +831,22 @@ await Actor.main(async () => {
                     if (!data.description_html) {
                         data.description_html = extractBestDescriptionHtml($);
                     } else {
-                        data.description_html = sanitizeDescriptionHtml(
-                            data.description_html
-                        );
+                        const decoded = decodeHtmlEntities(data.description_html);
+                        data.description_html = sanitizeDescriptionHtml(decoded);
                     }
 
                     // DESCRIPTION TEXT
                     data.description_text = data.description_html
                         ? cleanText(data.description_html)
                         : null;
+
+                    // Clean up company string if still noisy
+                    if (data.company) {
+                        const companyCleaned = extractCompany($, data.title);
+                        if (companyCleaned) data.company = companyCleaned;
+                    } else {
+                        data.company = extractCompany($, data.title);
+                    }
 
                     // LOCATION
                     if (!data.location) {
@@ -776,12 +873,19 @@ await Actor.main(async () => {
                             : `Posted ${overviewMeta.datePosted}`;
                     }
 
+                    // Normalize job_type to remove noise
+                    data.job_type = normalizeJobType(data.job_type) || data.job_type || null;
+
+                    // SKILLS / tags (optional)
+                    const skills = extractSkills($);
+
                     // SALARY
                     let salaryText = data.salary_text || null;
                     if (!salaryText) {
                         const salaryDom =
                             $('.compensation').first().text().trim() ||
                             $('[class*="salary"]').first().text().trim() ||
+                            $('span.box.box--blue').first().text().trim() ||
                             null;
                         salaryText = salaryDom || null;
                     }
@@ -811,6 +915,7 @@ await Actor.main(async () => {
                         date_posted: data.date_posted || null,
                         description_html: data.description_html || null,
                         description_text: data.description_text || null,
+                        skills: skills,
                         url: request.url,
                         _source: 'weworkremotely.com',
                     };
