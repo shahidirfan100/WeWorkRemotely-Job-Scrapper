@@ -5,7 +5,10 @@ import { load as cheerioLoad } from 'cheerio';
 
 const BASE_URL = 'https://weworkremotely.com';
 
-// Helper: absolute URL
+// ------------------------
+// Generic helpers
+// ------------------------
+
 const toAbs = (href, base = BASE_URL) => {
     try {
         return new URL(href, base).href;
@@ -14,7 +17,7 @@ const toAbs = (href, base = BASE_URL) => {
     }
 };
 
-// Helper: clean HTML → plain text
+// Clean HTML -> plain text
 const cleanText = (html) => {
     if (!html) return '';
     const $ = cheerioLoad(html);
@@ -22,53 +25,52 @@ const cleanText = (html) => {
     return $.root().text().replace(/\s+/g, ' ').trim();
 };
 
-// Helper: sanitize description HTML
-// - Keeps only text-related tags: p, br, strong, b, em, i, ul, ol, li, a
-// - Removes scripts, styles, JS, CSS, meta, etc.
-// - Strips all attributes except href on <a>
+// Keep only text-related tags in description_html
+// Allowed: p, br, strong, b, em, i, ul, ol, li, a
 const sanitizeDescriptionHtml = (html) => {
     if (!html) return null;
 
-    const rootWrapper = '<div id="__root__"></div>';
-    const $ = cheerioLoad(rootWrapper);
+    const $ = cheerioLoad('<div id="__root__"></div>');
     const root = $('#__root__');
     root.html(html);
 
-    // Remove non-content elements
-    root.find('script, style, noscript, iframe, canvas, svg, form, button, input, select, textarea, meta, link, head, title').remove();
+    // Remove obviously non-content elements
+    root
+        .find(
+            'script, style, noscript, iframe, canvas, svg, form, button, input, select, textarea, meta, link, head, title'
+        )
+        .remove();
 
     const ALLOWED_TAGS = new Set(['p', 'br', 'strong', 'b', 'em', 'i', 'ul', 'ol', 'li', 'a']);
 
-    // Walk all elements and unwrap non-allowed tags
     root.find('*').each((_, el) => {
         const tag = (el.tagName || el.name || '').toLowerCase();
+        const $el = root.find(el);
 
         if (!ALLOWED_TAGS.has(tag)) {
-            // Replace element with its children (keep text flow)
-            const $el = $(el);
-            $el.replaceWith($el.contents());
+            // unwrap element: keep children, remove wrapper
+            const children = $el.contents();
+            $el.replaceWith(children);
             return;
         }
 
-        // Strip attributes except href on <a>
+        // Strip all attributes except href on <a>
         const attribs = el.attribs || {};
         for (const name of Object.keys(attribs)) {
             if (!(tag === 'a' && name.toLowerCase() === 'href')) {
-                $(el).removeAttr(name);
+                $el.removeAttr(name);
             }
         }
     });
 
     let result = root.html() || '';
     result = result.trim();
-
-    // Normalize whitespace a bit
     result = result.replace(/\s+\n/g, '\n').replace(/\n\s+/g, '\n');
 
     return result || null;
 };
 
-// Helper: salary parser
+// Salary parser -> splits into salary_text, min, max, currency, interval
 const parseSalary = (raw) => {
     if (!raw && raw !== 0) {
         return {
@@ -94,12 +96,11 @@ const parseSalary = (raw) => {
     // Currency detection
     let currency = null;
     const currencyMatch =
-        text.match(/\b(USD|EUR|GBP|CAD|AUD|CHF|JPY)\b/i) ||
-        text.match(/[$€£¥]/);
+        text.match(/\b(USD|EUR|GBP|CAD|AUD|CHF|JPY)\b/i) || text.match(/[$€£¥]/);
 
     if (currencyMatch) {
-        const cur = currencyMatch[1] || currencyMatch[0];
-        switch (cur.toUpperCase()) {
+        const cur = (currencyMatch[1] || currencyMatch[0]).toUpperCase();
+        switch (cur) {
             case 'USD':
             case '$':
                 currency = 'USD';
@@ -130,7 +131,7 @@ const parseSalary = (raw) => {
         }
     }
 
-    // Interval detection (per year / hour / etc.)
+    // Interval detection
     let interval = null;
     const lower = text.toLowerCase();
 
@@ -146,8 +147,8 @@ const parseSalary = (raw) => {
         interval = 'hour';
     }
 
-    // Numeric extraction (supports "80,000", "80k", "80.5", etc.)
-    const numberFragments = [];
+    // Numeric extraction (supports "80,000", "80k", etc.)
+    const nums = [];
     const numRegex = /(\d[\d,\.]*\s*k?)/gi;
     let match;
     while ((match = numRegex.exec(text)) !== null) {
@@ -158,23 +159,19 @@ const parseSalary = (raw) => {
             numStr = numStr.slice(0, -1);
         }
         const parsed = parseFloat(numStr);
-        if (!Number.isNaN(parsed)) {
-            numberFragments.push(parsed * multiplier);
-        }
+        if (!Number.isNaN(parsed)) nums.push(parsed * multiplier);
     }
 
     let min = null;
     let max = null;
-    if (numberFragments.length === 1) {
-        min = numberFragments[0];
-        max = numberFragments[0];
-    } else if (numberFragments.length >= 2) {
-        // Take first two as range
-        min = Math.min(numberFragments[0], numberFragments[1]);
-        max = Math.max(numberFragments[0], numberFragments[1]);
+    if (nums.length === 1) {
+        min = nums[0];
+        max = nums[0];
+    } else if (nums.length >= 2) {
+        min = Math.min(nums[0], nums[1]);
+        max = Math.max(nums[0], nums[1]);
     }
 
-    // If no explicit interval but looks like a yearly salary, guess "year"
     if (!interval && min && min > 1000) {
         interval = 'year';
     }
@@ -188,13 +185,15 @@ const parseSalary = (raw) => {
     };
 };
 
-// Helper: build default category URL
 const buildStartUrl = (cat) => {
     const categorySlug = cat ? String(cat).trim() : 'all-other-remote-jobs';
     return `${BASE_URL}/categories/${categorySlug}`;
 };
 
-// Extract from JSON-LD
+// ------------------------
+// JSON-LD extraction
+// ------------------------
+
 const extractFromJsonLd = ($) => {
     const scripts = $('script[type="application/ld+json"]');
     for (let i = 0; i < scripts.length; i++) {
@@ -245,6 +244,8 @@ const extractFromJsonLd = ($) => {
                 }
 
                 const descHtml = e.description ? sanitizeDescriptionHtml(e.description) : null;
+                const employment = e.employmentType;
+                const jobType = Array.isArray(employment) ? employment.join(', ') : employment || null;
 
                 return {
                     title: e.title || e.name || null,
@@ -253,7 +254,7 @@ const extractFromJsonLd = ($) => {
                     description_html: descHtml,
                     location: location,
                     salary_text: salaryText,
-                    job_type: e.employmentType || null,
+                    job_type: jobType,
                 };
             }
         } catch {
@@ -263,24 +264,24 @@ const extractFromJsonLd = ($) => {
     return null;
 };
 
+// ------------------------
+// WWR-specific extraction helpers
+// ------------------------
+
 // Collect job detail links from a list page
 const findJobLinks = ($, base) => {
     const links = new Set();
-
     $('a[href*="/remote-jobs/"]').each((_, a) => {
         const href = $(a).attr('href');
         if (!href) return;
-        // Ensure it's a job detail page (no trailing slash / extra segments)
         if (/\/remote-jobs\/[^\/?#]+$/i.test(href)) {
             const abs = toAbs(href, base);
             if (abs) links.add(abs);
         }
     });
-
     return [...links];
 };
 
-// Build next page URL
 const findNextPage = (currentUrl, currentPageNo) => {
     try {
         const url = new URL(currentUrl);
@@ -291,6 +292,167 @@ const findNextPage = (currentUrl, currentPageNo) => {
         return null;
     }
 };
+
+// Extract company name with heuristics (fixes "We're Walter!" case)
+const extractCompany = ($, title) => {
+    // 1) Prefer clean, explicit selectors
+    const selectors = [
+        'a[href*="/company/"]',
+        '.company-name',
+        '.company h2',
+        '.company h3',
+        '.listing-company a',
+    ];
+
+    for (const sel of selectors) {
+        const txt = $(sel).first().text().replace(/\s+/g, ' ').trim();
+        if (txt && txt.length <= 80) {
+            return txt;
+        }
+    }
+
+    // 2) Fallback: parse from header text
+    const headerText = $('.listing-header-container')
+        .first()
+        .text()
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    if (!headerText) return null;
+
+    // Try "We're X" / "We are X"
+    const weMatch = headerText.match(/We(?:'re| are)\s+([A-Z][A-Za-z0-9 &\-]{1,60})[!.,]/);
+    if (weMatch) return weMatch[1].trim();
+
+    // Remove title prefix if present
+    let candidate = headerText;
+    if (title && candidate.startsWith(title)) {
+        candidate = candidate.slice(title.length).trim();
+    }
+
+    // Cut off "Posted ..." section
+    candidate = candidate.replace(/Posted\s+\d+.*?(ago)?/i, '').trim();
+    // Remove "Apply now" and similar CTA
+    candidate = candidate.replace(/Apply now.*$/i, '').trim();
+
+    if (candidate.length > 80) return null;
+    return candidate || null;
+};
+
+// Extract date_posted with multiple fallbacks
+const extractDatePosted = ($, jsonDate) => {
+    if (jsonDate) return jsonDate;
+
+    // 1) <time datetime="...">
+    const dtAttr =
+        $('.listing-header-container time[datetime]')
+            .first()
+            .attr('datetime') ||
+        $('time[datetime]').first().attr('datetime');
+    if (dtAttr && dtAttr.trim()) return dtAttr.trim();
+
+    // 2) time element text
+    const timeText =
+        $('.listing-header-container time').first().text().trim() ||
+        $('time').first().text().trim();
+    if (timeText) return timeText;
+
+    // 3) "Posted X ago" in header text
+    const headerText = $('.listing-header-container')
+        .first()
+        .text()
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (headerText) {
+        const postedMatch = headerText.match(/Posted\s+(.+?)(?:\s+ago|$)/i);
+        if (postedMatch && postedMatch[1]) return `Posted ${postedMatch[1].trim()}`;
+    }
+
+    // 4) Meta tags
+    const metaDate =
+        $('meta[property="article:published_time"]').attr('content') ||
+        $('meta[name="date"]').attr('content') ||
+        null;
+    if (metaDate && metaDate.trim()) return metaDate.trim();
+
+    return null;
+};
+
+// Extract job type from tags/labels around header
+const extractJobType = ($, jsonJobType) => {
+    if (jsonJobType) return jsonJobType;
+
+    const pieces = new Set();
+
+    $('.listing-header-container .listing-tag').each((_, el) => {
+        const t = cheerioLoad(el).root().text().replace(/\s+/g, ' ').trim();
+        if (t) pieces.add(t);
+    });
+
+    $('.listing-tag').each((_, el) => {
+        const t = cheerioLoad(el).root().text().replace(/\s+/g, ' ').trim();
+        if (t) pieces.add(t);
+    });
+
+    $('ul.listing-tags li').each((_, el) => {
+        const t = cheerioLoad(el).root().text().replace(/\s+/g, ' ').trim();
+        if (t) pieces.add(t);
+    });
+
+    $('[class*="employment"], [class*="job-type"]').each((_, el) => {
+        const t = cheerioLoad(el).root().text().replace(/\s+/g, ' ').trim();
+        if (t) pieces.add(t);
+    });
+
+    const all = [...pieces];
+    if (!all.length) return null;
+
+    // Prefer entries that clearly look like job types
+    const preferred = all.find((t) =>
+        /(full[\s-]?time|part[\s-]?time|contract|freelance|temporary|intern(ship)?)/i.test(t)
+    );
+    return preferred || all.join(' | ');
+};
+
+// Pick best description container (longest sanitized text)
+const extractBestDescriptionHtml = ($) => {
+    const selectors = [
+        '.listing-container--description',
+        '.listing-container .listing-body',
+        '.listing-container',
+        '#job-description',
+        '[data-id="job-description"]',
+        '[class*="job-description"]',
+        '.description',
+        'article',
+    ];
+
+    let bestHtml = null;
+    let bestLen = 0;
+
+    for (const sel of selectors) {
+        const el = $(sel).first();
+        if (!el || !el.length) continue;
+
+        const raw = String(el.html() || '').trim();
+        if (!raw) continue;
+
+        const sanitized = sanitizeDescriptionHtml(raw);
+        if (!sanitized) continue;
+
+        const len = cleanText(sanitized).length;
+        if (len > bestLen) {
+            bestLen = len;
+            bestHtml = sanitized;
+        }
+    }
+
+    return bestHtml;
+};
+
+// ------------------------
+// Main actor
+// ------------------------
 
 await Actor.main(async () => {
     const input = (await Actor.getInput()) || {};
@@ -313,7 +475,7 @@ await Actor.main(async () => {
         ? Math.max(1, +MAX_PAGES_RAW)
         : 999;
 
-    // Build initial URLs
+    // Initial URLs
     const initial = [];
     if (Array.isArray(startUrls) && startUrls.length) initial.push(...startUrls);
     if (startUrl) initial.push(startUrl);
@@ -334,7 +496,6 @@ await Actor.main(async () => {
         requestHandlerTimeoutSecs: 60,
         preNavigationHooks: [
             async ({ request }) => {
-                // Simple but realistic headers for "stealth"
                 request.headers = {
                     ...(request.headers || {}),
                     'User-Agent':
@@ -352,7 +513,9 @@ await Actor.main(async () => {
                 crawlerLog.info(`LIST ${request.url} -> found ${links.length} job links`);
 
                 if (saved >= RESULTS_WANTED) {
-                    crawlerLog.debug(`LIST reached RESULTS_WANTED (${RESULTS_WANTED}). Skipping further processing.`);
+                    crawlerLog.debug(
+                        `LIST reached RESULTS_WANTED (${RESULTS_WANTED}). Skipping further processing.`
+                    );
                     return;
                 }
 
@@ -373,7 +536,7 @@ await Actor.main(async () => {
                             toPush.map((u) => ({
                                 url: u,
                                 _source: 'weworkremotely.com',
-                            })),
+                            }))
                         );
                         saved += toPush.length;
                     }
@@ -393,7 +556,9 @@ await Actor.main(async () => {
 
             if (label === 'DETAIL') {
                 if (saved >= RESULTS_WANTED) {
-                    crawlerLog.debug(`DETAIL ${request.url} skipped (RESULTS_WANTED reached).`);
+                    crawlerLog.debug(
+                        `DETAIL ${request.url} skipped (RESULTS_WANTED reached).`
+                    );
                     return;
                 }
 
@@ -411,48 +576,24 @@ await Actor.main(async () => {
                             null;
                     }
 
-                    // COMPANY
+                    // COMPANY (with heuristics)
                     if (!data.company) {
-                        data.company =
-                            $('.listing-header-container h2').first().text().trim() ||
-                            $('.listing-header-container .company').first().text().trim() ||
-                            $('.company h2').first().text().trim() ||
-                            $('.company-name').first().text().trim() ||
-                            $('a[href*="/company/"]').first().text().trim() ||
-                            $('[class*="company"]').first().text().trim() ||
-                            null;
+                        data.company = extractCompany($, data.title);
                     }
 
-                    // DESCRIPTION HTML
+                    // DESCRIPTION HTML (use best container, always sanitized)
                     if (!data.description_html) {
-                        let desc =
-                            $('.listing-container--description').first();
-                        if (!desc || !desc.length) {
-                            desc =
-                                $('.listing-container .listing-body').first() ||
-                                $('.listing-container').first() ||
-                                $('#job-description').first() ||
-                                $('[data-id="job-description"]').first() ||
-                                $('[class*="job-description"]').first() ||
-                                $('.description').first();
-                        }
-                        if (!desc || !desc.length) {
-                            desc = $('article').first();
-                        }
-
-                        if (desc && desc.length) {
-                            const rawHtml = String(desc.html() || '').trim();
-                            data.description_html = sanitizeDescriptionHtml(rawHtml);
-                        } else {
-                            data.description_html = null;
-                        }
+                        data.description_html = extractBestDescriptionHtml($);
                     } else {
-                        // Ensure JSON-LD description is sanitized too
-                        data.description_html = sanitizeDescriptionHtml(data.description_html);
+                        data.description_html = sanitizeDescriptionHtml(
+                            data.description_html
+                        );
                     }
 
-                    // DESCRIPTION TEXT (always derived from sanitized HTML)
-                    data.description_text = data.description_html ? cleanText(data.description_html) : null;
+                    // DESCRIPTION TEXT
+                    data.description_text = data.description_html
+                        ? cleanText(data.description_html)
+                        : null;
 
                     // LOCATION
                     if (!data.location) {
@@ -463,47 +604,10 @@ await Actor.main(async () => {
                     }
 
                     // DATE POSTED
-                    if (!data.date_posted) {
-                        let datePosted = null;
-
-                        // 1) time element with datetime
-                        const timeEl =
-                            $('.listing-header-container time').first().attr('datetime') ||
-                            $('time').first().attr('datetime');
-                        if (timeEl) {
-                            datePosted = timeEl.trim();
-                        }
-
-                        // 2) time element text
-                        if (!datePosted) {
-                            const timeText =
-                                $('.listing-header-container time').first().text().trim() ||
-                                $('time').first().text().trim();
-                            if (timeText) datePosted = timeText;
-                        }
-
-                        // 3) meta tags as fallback
-                        if (!datePosted) {
-                            const metaDate =
-                                $('meta[property="article:published_time"]').attr('content') ||
-                                $('meta[name="date"]').attr('content') ||
-                                null;
-                            if (metaDate) datePosted = metaDate.trim();
-                        }
-
-                        data.date_posted = datePosted || null;
-                    }
+                    data.date_posted = extractDatePosted($, data.date_posted);
 
                     // JOB TYPE
-                    if (!data.job_type) {
-                        data.job_type =
-                            $('.listing-header-container .listing-tag').first().text().trim() ||
-                            $('.listing-tag').first().text().trim() ||
-                            $('ul.listing-tags li').first().text().trim() ||
-                            $('[class*="employment"]').first().text().trim() ||
-                            $('[class*="job-type"]').first().text().trim() ||
-                            null;
-                    }
+                    data.job_type = extractJobType($, data.job_type);
 
                     // SALARY
                     let salaryText = data.salary_text || null;
@@ -514,12 +618,14 @@ await Actor.main(async () => {
                             null;
                         salaryText = salaryDom || null;
                     }
-
                     const salaryParsed = parseSalary(salaryText);
 
                     // CATEGORY
                     const jobCategory =
-                        $('.listing-header-container a[href*="/categories/"]').first().text().trim() ||
+                        $('.listing-header-container a[href*="/categories/"]')
+                            .first()
+                            .text()
+                            .trim() ||
                         category ||
                         null;
 
@@ -528,7 +634,6 @@ await Actor.main(async () => {
                         company: data.company || null,
                         category: jobCategory,
                         location: data.location || null,
-                        // salary - keep raw + split fields
                         salary: salaryParsed.salary_text, // backward compatible
                         salary_text: salaryParsed.salary_text,
                         salary_min: salaryParsed.salary_min,
@@ -545,7 +650,9 @@ await Actor.main(async () => {
 
                     await Dataset.pushData(item);
                     saved += 1;
-                    crawlerLog.debug(`DETAIL saved (${saved}/${RESULTS_WANTED}): ${request.url}`);
+                    crawlerLog.debug(
+                        `DETAIL saved (${saved}/${RESULTS_WANTED}): ${request.url}`
+                    );
                 } catch (err) {
                     crawlerLog.error(`DETAIL ${request.url} failed: ${err.message}`);
                 }
@@ -557,7 +664,7 @@ await Actor.main(async () => {
         initial.map((u) => ({
             url: u,
             userData: { label: 'LIST', pageNo: 1 },
-        })),
+        }))
     );
 
     log.info(`Finished. Saved ${saved} items`);
