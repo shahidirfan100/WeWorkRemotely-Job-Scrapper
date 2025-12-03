@@ -58,6 +58,31 @@ const stripCtaFromDescription = (html) => {
         }
     });
 
+    // Remove breadcrumb / nav anchors at the top
+    root.find('a').each((idx, el) => {
+        const text = $(el).text().replace(/\s+/g, ' ').trim();
+        const href = ($(el).attr('href') || '').trim();
+        const isBreadcrumb =
+            /^\/(categories|listings|remote-jobs|company|$)/i.test(href) ||
+            /(all jobs|all other remote|top trending|post a job|sign in|apply)/i.test(text);
+        if (idx < 8 && (isBreadcrumb || text.length <= 30)) {
+            $(el).remove();
+        }
+    });
+
+    // Drop leading paragraphs/headings that are short nav/breadcrumb text
+    root.children().each((idx, el) => {
+        if (idx > 5) return false;
+        const text = $(el).text().replace(/\s+/g, ' ').trim();
+        if (!text) return;
+        if (
+            text.length <= 40 &&
+            /(all jobs|all other remote|posted\s+\d|apply now|save job|sign in)/i.test(text)
+        ) {
+            $(el).remove();
+        }
+    });
+
     // Remove headers that are clearly navigation
     root.find('h1, h2, h3').each((_, el) => {
         const text = $(el).text().replace(/\s+/g, ' ').trim();
@@ -636,6 +661,11 @@ const extractSkills = ($) => {
     return filtered.length ? [...new Set(filtered)] : null;
 };
 
+const formatSkills = (skillsArr) => {
+    if (!skillsArr || !skillsArr.length) return null;
+    return skillsArr.join(', ');
+};
+
 // Pick best description container (longest sanitized text)
 const extractBestDescriptionHtml = ($) => {
     const selectors = [
@@ -959,7 +989,7 @@ await Actor.main(async () => {
                         date_posted: data.date_posted || null,
                         description_html: data.description_html || null,
                         description_text: data.description_text || null,
-                        skills: skills,
+                        skills: formatSkills(skills),
                         url: request.url,
                         _source: 'weworkremotely.com',
                     };
