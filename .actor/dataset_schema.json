@@ -11,6 +11,9 @@
           "category",
           "location",
           "salary",
+          "min_salary",
+          "max_salary",
+          "currency",
           "job_type",
           "date_posted",
           "url"
@@ -37,6 +40,18 @@
           },
           "salary": {
             "label": "Salary",
+            "format": "text"
+          },
+          "min_salary": {
+            "label": "Min Salary",
+            "format": "number"
+          },
+          "max_salary": {
+            "label": "Max Salary",
+            "format": "number"
+          },
+          "currency": {
+            "label": "Currency",
             "format": "text"
           },
           "job_type": {

@@ -34,7 +34,9 @@ Configure the scraper with these options:
 
 | Field | Type | Description | Default |
 |-------|------|-------------|---------|
-| `category` | String | Job category to scrape | `all-other-remote-jobs` |
+| `keyword` | String | Search for jobs by keyword (overrides category) | - |
+| `location` | String | Filter by location/region (works with keyword) | - |
+| `category` | String | Job category to scrape (used if no keyword) | `all-other-remote-jobs` |
 | `results_wanted` | Number | Maximum number of jobs to collect | 100 |
 | `max_pages` | Number | Maximum listing pages to visit | 20 |
 | `collectDetails` | Boolean | Scrape full job descriptions from detail pages | true |
@@ -72,6 +74,9 @@ Each scraped job contains the following data:
   "category": "Full-Stack Programming",
   "location": "Anywhere in the World",
   "salary": "$100,000 or more USD",
+  "min_salary": 100000,
+  "max_salary": null,
+  "currency": "USD",
   "job_type": "Full-Time",
   "date_posted": "2025-12-01T10:00:00Z",
   "description_html": "<p>We are looking for...</p>",
@@ -86,7 +91,10 @@ Each scraped job contains the following data:
 - **company** - Hiring company name
 - **category** - Job category
 - **location** - Geographic restrictions or "Anywhere in the World"
-- **salary** - Salary range if provided
+- **salary** - Original salary text as displayed
+- **min_salary** - Minimum salary amount (parsed from salary text)
+- **max_salary** - Maximum salary amount (parsed from salary text)
+- **currency** - Currency code (USD, EUR, GBP, etc.)
 - **job_type** - Employment type (Full-Time, Contract, etc.)
 - **date_posted** - When the job was posted
 - **description_html** - Full job description in HTML format
@@ -95,7 +103,20 @@ Each scraped job contains the following data:
 
 ## Usage Examples
 
-### Example 1: Scrape Programming Jobs
+### Example 1: Search by Keyword
+
+Search for specific job titles or skills:
+
+```json
+{
+  "keyword": "Python Developer",
+  "location": "United States",
+  "results_wanted": 50,
+  "collectDetails": true
+}
+```
+
+### Example 2: Scrape by Category
 
 Extract the latest 50 full-stack programming positions:
 
@@ -108,20 +129,20 @@ Extract the latest 50 full-stack programming positions:
 }
 ```
 
-### Example 2: Quick Scan Without Details
+### Example 3: Quick Scan Without Details
 
 Quickly gather job links without full descriptions for faster execution:
 
 ```json
 {
-  "category": "remote-design-jobs",
+  "keyword": "Designer",
   "results_wanted": 100,
   "max_pages": 10,
   "collectDetails": false
 }
 ```
 
-### Example 3: Custom URL
+### Example 4: Custom URL
 
 Scrape from a specific WeWorkRemotely URL:
 
@@ -133,7 +154,7 @@ Scrape from a specific WeWorkRemotely URL:
 }
 ```
 
-### Example 4: Large Dataset Collection
+### Example 5: Large Dataset Collection
 
 Collect all available jobs from a category:
 

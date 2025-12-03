@@ -7,14 +7,28 @@
     "startUrl": {
       "title": "Start URL",
       "type": "string",
-      "description": "Start scraping from a specific WeWorkRemotely URL. If provided, this overrides the category selection.",
+      "description": "Start scraping from a specific WeWorkRemotely URL. If provided, this overrides all other search parameters.",
       "editor": "textfield",
       "example": "https://weworkremotely.com/categories/remote-programming-jobs"
+    },
+    "keyword": {
+      "title": "Search Keyword",
+      "type": "string",
+      "description": "Search for jobs by keyword (e.g., 'Python Developer', 'Marketing Manager'). If provided, overrides category selection and uses search page.",
+      "editor": "textfield",
+      "example": "React Developer"
+    },
+    "location": {
+      "title": "Location/Region",
+      "type": "string",
+      "description": "Filter jobs by location or region. Works with keyword search. Examples: 'USA', 'Europe', 'Anywhere in the World'",
+      "editor": "textfield",
+      "example": "United States"
     },
     "category": {
       "title": "Job Category",
       "type": "string",
-      "description": "Select a job category to scrape from WeWorkRemotely.",
+      "description": "Select a job category to scrape. Used only if keyword is not provided.",
       "editor": "select",
       "default": "all-other-remote-jobs",
       "enum": [
