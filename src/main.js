@@ -35,6 +35,37 @@ const decodeHtmlEntities = (value) => {
     return node.text();
 };
 
+// Remove CTA / navigation clutter from description HTML
+const stripCtaFromDescription = (html) => {
+    if (!html) return html;
+    const $ = cheerioLoad(`<div id="__desc__">${html}</div>`);
+    const root = $('#__desc__');
+
+    const CTA_TEXT = /(apply now|save job|save this job|sign in|post a job|jobcopilot|activate jobcopilot|share|back to all jobs)/i;
+    const CTA_SELECTORS = [
+        'button',
+        'a',
+        '[class*="cta"]',
+        '[class*="button"]',
+        '[class*="apply"]',
+        '[data-testid*="apply"]',
+    ];
+
+    root.find(CTA_SELECTORS.join(',')).each((_, el) => {
+        const text = $(el).text().replace(/\s+/g, ' ').trim();
+        if (CTA_TEXT.test(text)) {
+            $(el).remove();
+        }
+    });
+
+    // Remove headers that are clearly navigation
+    root.find('h1, h2, h3').each((_, el) => {
+        const text = $(el).text().replace(/\s+/g, ' ').trim();
+        if (CTA_TEXT.test(text)) $(el).remove();
+    });
+
+    return root.html() || '';
+};
 // Keep only text-related tags in description_html
 // Allowed: p, br, strong, b, em, i, ul, ol, li, a
 const sanitizeDescriptionHtml = (html) => {
@@ -598,7 +629,11 @@ const extractSkills = ($) => {
         if (t) skills.push(t);
     });
 
-    return skills.length ? [...new Set(skills)] : null;
+    const filtered = skills.filter(
+        (s) => !/(anywhere|world|remote|all other)/i.test(s)
+    );
+
+    return filtered.length ? [...new Set(filtered)] : null;
 };
 
 // Pick best description container (longest sanitized text)
@@ -643,7 +678,8 @@ const extractBestDescriptionHtml = ($) => {
             raw = decodeHtmlEntities(raw);
         }
 
-        const sanitized = sanitizeDescriptionHtml(raw);
+        const cleaned = stripCtaFromDescription(raw);
+        const sanitized = sanitizeDescriptionHtml(cleaned);
         if (!sanitized) continue;
 
         const len = cleanText(sanitized).length;
@@ -675,12 +711,12 @@ const extractBestDescriptionHtml = ($) => {
     // Last-resort: pick the longest content block in <main> / body
     if (!bestHtml) {
         const contentCandidates = $('main section, main article, main div, body section, body article');
-        const SKIP_PATTERNS = /(related jobs|apply now|jobcopilot|sign in|post a job)/i;
+        const SKIP_PATTERNS = /(related jobs|apply now|jobcopilot|sign in|post a job|save job|back to all jobs)/i;
 
         contentCandidates.each((_, el) => {
             const raw = String($(el).html() || '').trim();
             if (!raw) return;
-            const sanitized = sanitizeDescriptionHtml(raw);
+            const sanitized = sanitizeDescriptionHtml(stripCtaFromDescription(raw));
             if (!sanitized) return;
             const text = cleanText(sanitized);
             if (text.length < 120) return; // skip tiny snippets
@@ -888,6 +924,14 @@ await Actor.main(async () => {
                             $('span.box.box--blue').first().text().trim() ||
                             null;
                         salaryText = salaryDom || null;
+                    }
+                    if (
+                        salaryText &&
+                        /(anywhere in the world|all other remote|all other|remote|world)/i.test(
+                            salaryText
+                        )
+                    ) {
+                        salaryText = null;
                     }
                     const salaryParsed = parseSalary(salaryText);
 
