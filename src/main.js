@@ -159,21 +159,6 @@ const parseSalary = (raw) => {
         };
     }
 
-    // Reject obvious non-salary taxonomy strings
-    if (
-        /^(anywhere in the world|all other remote|all other|remote|world|management and finance|design|customer support|sales and marketing)$/i.test(
-            text
-        )
-    ) {
-        return {
-            salary_text: null,
-            salary_min: null,
-            salary_max: null,
-            salary_currency: null,
-            salary_interval: null,
-        };
-    }
-
     // Currency detection
     let currency = null;
     const currencyMatch =
@@ -271,15 +256,6 @@ const buildStartUrl = (cat) => {
     return `${BASE_URL}/categories/${categorySlug}`;
 };
 
-const buildKeywordUrl = (keyword, location) => {
-    const term = keyword ? encodeURIComponent(String(keyword).trim()) : '';
-    const loc = location ? encodeURIComponent(String(location).trim()) : '';
-    const url = new URL(`${BASE_URL}/remote-jobs/search`);
-    if (term) url.searchParams.set('term', term);
-    if (loc) url.searchParams.set('region', loc);
-    return url.href;
-};
-
 // ------------------------
 // JSON-LD extraction
 // ------------------------
@@ -364,11 +340,10 @@ const findJobLinks = ($, base) => {
     $('a[href*="/remote-jobs/"]').each((_, a) => {
         const href = $(a).attr('href');
         if (!href) return;
-        // Allow query/hash after slug (search pages often append params)
-        const match = href.match(/\/remote-jobs\/[^\/?#]+/i);
-        if (!match) return;
-        const abs = toAbs(match[0], base);
-        if (abs) links.add(abs);
+        if (/\/remote-jobs\/[^\/?#]+$/i.test(href)) {
+            const abs = toAbs(href, base);
+            if (abs) links.add(abs);
+        }
     });
     return [...links];
 };
@@ -795,8 +770,6 @@ await Actor.main(async () => {
     const input = (await Actor.getInput()) || {};
     const {
         category = 'all-other-remote-jobs',
-        keyword,
-        location,
         results_wanted: RESULTS_WANTED_RAW = 100,
         max_pages: MAX_PAGES_RAW = 999,
         collectDetails = true,
@@ -819,13 +792,7 @@ await Actor.main(async () => {
     if (Array.isArray(startUrls) && startUrls.length) initial.push(...startUrls);
     if (startUrl) initial.push(startUrl);
     if (url) initial.push(url);
-    if (!initial.length) {
-        if (keyword) {
-            initial.push(buildKeywordUrl(keyword, location));
-        } else {
-            initial.push(buildStartUrl(category));
-        }
-    }
+    if (!initial.length) initial.push(buildStartUrl(category));
 
     const proxyConf = proxyConfiguration
         ? await Actor.createProxyConfiguration({ ...proxyConfiguration })
@@ -887,8 +854,7 @@ await Actor.main(async () => {
                     }
                 }
 
-                // Keep paginating while under limits, even if a page returned 0 links (search pages can be sparse)
-                if (saved < RESULTS_WANTED && pageNo < MAX_PAGES) {
+                if (saved < RESULTS_WANTED && pageNo < MAX_PAGES && links.length > 0) {
                     const next = findNextPage(request.url, pageNo);
                     if (next) {
                         await enqueueLinks({
