@@ -302,6 +302,10 @@ const extractCompany = ($, title) => {
         '.company h2',
         '.company h3',
         '.listing-company a',
+        '.listing-header-container [class*="company"]',
+        '.job-company',
+        '.company-card h3',
+        '.company-card h2',
     ];
 
     for (const sel of selectors) {
@@ -309,6 +313,37 @@ const extractCompany = ($, title) => {
         if (txt && txt.length <= 80) {
             return txt;
         }
+    }
+
+    // 1b) Derive from company profile link slug
+    const companyHref = $('a[href*="/company/"]').first().attr('href');
+    if (companyHref) {
+        const slug = companyHref
+            .split('/')
+            .filter(Boolean)
+            .pop();
+        if (slug) {
+            const name = slug
+                .split(/[-_]/)
+                .filter(Boolean)
+                .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+                .join(' ');
+            if (name) return name;
+        }
+    }
+
+    // 1a) Meta titles like "Remote X at Company - WWR"
+    const metaTitles = [
+        $('meta[property="og:title"]').attr('content'),
+        $('meta[name="twitter:title"]').attr('content'),
+        $('title').first().text(),
+    ].filter(Boolean);
+
+    for (const mt of metaTitles) {
+        const m = String(mt)
+            .replace(/\s+/g, ' ')
+            .match(/\bat\s+([A-Z][A-Za-z0-9 .,&\-]{1,80})/i);
+        if (m && m[1]) return m[1].trim();
     }
 
     // 2) Fallback: parse from header text
@@ -375,6 +410,11 @@ const extractDatePosted = ($, jsonDate) => {
         null;
     if (metaDate && metaDate.trim()) return metaDate.trim();
 
+    // 5) Generic "Posted ..." anywhere in body text
+    const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
+    const looseMatch = bodyText.match(/Posted\s+(on\s+)?([^•|]+?)(?:\s+(Apply|Job type|Category|Region|$))/i);
+    if (looseMatch && looseMatch[2]) return `Posted ${looseMatch[2].trim()}`;
+
     return null;
 };
 
@@ -404,6 +444,15 @@ const extractJobType = ($, jsonJobType) => {
         if (t) pieces.add(t);
     });
 
+    // Elements with explicit label "Job type"
+    const jobTypeLabel = $('*:contains("Job type")')
+        .filter((_, el) => /Job type/i.test($(el).text()))
+        .first();
+    if (jobTypeLabel.length) {
+        const jtMatch = jobTypeLabel.text().replace(/\s+/g, ' ').match(/Job type[:\-\s]*([A-Za-z/ &\-]{3,60})/i);
+        if (jtMatch && jtMatch[1]) pieces.add(jtMatch[1].trim());
+    }
+
     const all = [...pieces];
     if (!all.length) return null;
 
@@ -412,6 +461,60 @@ const extractJobType = ($, jsonJobType) => {
         /(full[\s-]?time|part[\s-]?time|contract|freelance|temporary|intern(ship)?)/i.test(t)
     );
     return preferred || all.join(' | ');
+};
+
+// Parse "About the job" / overview blocks for metadata fallbacks
+const extractOverviewMeta = ($) => {
+    const candidates = [];
+    const overviewSelectors = [
+        'section:contains("About the job")',
+        'section:contains("About the role")',
+        'section:contains("About this role")',
+        '.job-overview',
+        '.job-summary',
+        '.job-meta',
+        '.listing-overview',
+        'aside:contains("About the job")',
+    ];
+
+    for (const sel of overviewSelectors) {
+        const el = $(sel).first();
+        if (el && el.length) candidates.push(el);
+    }
+
+    if (!candidates.length) {
+        const fallback = $('main')
+            .find('section, article, div')
+            .filter((_, el) => {
+                const txt = $(el).text().toLowerCase();
+                return txt.includes('about the job') || txt.includes('job type') || txt.includes('apply before');
+            })
+            .first();
+        if (fallback && fallback.length) candidates.push(fallback);
+    }
+
+    let jobType = null;
+    let datePosted = null;
+
+    for (const el of candidates) {
+        const text = $(el).text().replace(/\s+/g, ' ').trim();
+
+        if (!jobType) {
+            const jtMatch = text.match(/Job type[:\-\s]*([A-Za-z/ &\-]{3,80})/i);
+            if (jtMatch && jtMatch[1]) jobType = jtMatch[1].trim();
+        }
+
+        if (!datePosted) {
+            const dpMatch =
+                text.match(/Posted\s+(on\s+)?([A-Za-z0-9 ,]+?)(?:\s+(Apply|Job type|Category|Region|$))/i) ||
+                text.match(/Posted\s+([0-9]+[^•|,]*)/i);
+            if (dpMatch && (dpMatch[2] || dpMatch[1])) {
+                datePosted = (dpMatch[2] || dpMatch[1]).trim();
+            }
+        }
+    }
+
+    return { jobType, datePosted };
 };
 
 // Pick best description container (longest sanitized text)
@@ -425,6 +528,19 @@ const extractBestDescriptionHtml = ($) => {
         '[class*="job-description"]',
         '.description',
         'article',
+        '.job-details',
+        '.job-body',
+        '.job-content',
+        '.listing-page',
+        '.listing-page__body',
+        '.listing-page__content',
+        '.job-page',
+        '.job-posting',
+        'section:contains("About the job")',
+        'section:contains("Job Description")',
+        'section:contains("About the role")',
+        'div[itemprop="description"]',
+        '[data-testid*="description"]',
     ];
 
     let bestHtml = null;
@@ -445,6 +561,46 @@ const extractBestDescriptionHtml = ($) => {
             bestLen = len;
             bestHtml = sanitized;
         }
+    }
+
+    // If nothing matched, try "About the job" heading containers
+    if (!bestHtml) {
+        const headings = $('h2, h3').filter((_, el) =>
+            /about the job|about the role|job description/i.test($(el).text())
+        );
+        for (const h of headings.toArray()) {
+            const parent = $(h).parent();
+            if (!parent || !parent.length) continue;
+            const raw = String(parent.html() || '').trim();
+            const sanitized = sanitizeDescriptionHtml(raw);
+            if (!sanitized) continue;
+            const len = cleanText(sanitized).length;
+            if (len > bestLen) {
+                bestLen = len;
+                bestHtml = sanitized;
+            }
+        }
+    }
+
+    // Last-resort: pick the longest content block in <main> / body
+    if (!bestHtml) {
+        const contentCandidates = $('main section, main article, main div, body section, body article');
+        const SKIP_PATTERNS = /(related jobs|apply now|jobcopilot|sign in|post a job)/i;
+
+        contentCandidates.each((_, el) => {
+            const raw = String($(el).html() || '').trim();
+            if (!raw) return;
+            const sanitized = sanitizeDescriptionHtml(raw);
+            if (!sanitized) return;
+            const text = cleanText(sanitized);
+            if (text.length < 120) return; // skip tiny snippets
+            if (SKIP_PATTERNS.test(text) && text.length < 400) return;
+
+            if (text.length > bestLen) {
+                bestLen = text.length;
+                bestHtml = sanitized;
+            }
+        });
     }
 
     return bestHtml;
@@ -608,6 +764,17 @@ await Actor.main(async () => {
 
                     // JOB TYPE
                     data.job_type = extractJobType($, data.job_type);
+
+                    // Overview block fallbacks (Job type / date posted)
+                    const overviewMeta = extractOverviewMeta($);
+                    if (!data.job_type && overviewMeta.jobType) {
+                        data.job_type = overviewMeta.jobType;
+                    }
+                    if (!data.date_posted && overviewMeta.datePosted) {
+                        data.date_posted = overviewMeta.datePosted.startsWith('Posted')
+                            ? overviewMeta.datePosted
+                            : `Posted ${overviewMeta.datePosted}`;
+                    }
 
                     // SALARY
                     let salaryText = data.salary_text || null;
