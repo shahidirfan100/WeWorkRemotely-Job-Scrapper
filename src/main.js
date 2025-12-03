@@ -159,6 +159,21 @@ const parseSalary = (raw) => {
         };
     }
 
+    // Reject obvious non-salary taxonomy strings
+    if (
+        /^(anywhere in the world|all other remote|all other|remote|world|management and finance|design|customer support|sales and marketing)$/i.test(
+            text
+        )
+    ) {
+        return {
+            salary_text: null,
+            salary_min: null,
+            salary_max: null,
+            salary_currency: null,
+            salary_interval: null,
+        };
+    }
+
     // Currency detection
     let currency = null;
     const currencyMatch =
@@ -349,10 +364,11 @@ const findJobLinks = ($, base) => {
     $('a[href*="/remote-jobs/"]').each((_, a) => {
         const href = $(a).attr('href');
         if (!href) return;
-        if (/\/remote-jobs\/[^\/?#]+$/i.test(href)) {
-            const abs = toAbs(href, base);
-            if (abs) links.add(abs);
-        }
+        // Allow query/hash after slug (search pages often append params)
+        const match = href.match(/\/remote-jobs\/[^\/?#]+/i);
+        if (!match) return;
+        const abs = toAbs(match[0], base);
+        if (abs) links.add(abs);
     });
     return [...links];
 };
@@ -871,7 +887,8 @@ await Actor.main(async () => {
                     }
                 }
 
-                if (saved < RESULTS_WANTED && pageNo < MAX_PAGES && links.length > 0) {
+                // Keep paginating while under limits, even if a page returned 0 links (search pages can be sparse)
+                if (saved < RESULTS_WANTED && pageNo < MAX_PAGES) {
                     const next = findNextPage(request.url, pageNo);
                     if (next) {
                         await enqueueLinks({
