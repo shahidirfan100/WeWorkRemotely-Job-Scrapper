@@ -256,6 +256,15 @@ const buildStartUrl = (cat) => {
     return `${BASE_URL}/categories/${categorySlug}`;
 };
 
+const buildKeywordUrl = (keyword, location) => {
+    const term = keyword ? encodeURIComponent(String(keyword).trim()) : '';
+    const loc = location ? encodeURIComponent(String(location).trim()) : '';
+    const url = new URL(`${BASE_URL}/remote-jobs/search`);
+    if (term) url.searchParams.set('term', term);
+    if (loc) url.searchParams.set('region', loc);
+    return url.href;
+};
+
 // ------------------------
 // JSON-LD extraction
 // ------------------------
@@ -770,6 +779,8 @@ await Actor.main(async () => {
     const input = (await Actor.getInput()) || {};
     const {
         category = 'all-other-remote-jobs',
+        keyword,
+        location,
         results_wanted: RESULTS_WANTED_RAW = 100,
         max_pages: MAX_PAGES_RAW = 999,
         collectDetails = true,
@@ -792,7 +803,13 @@ await Actor.main(async () => {
     if (Array.isArray(startUrls) && startUrls.length) initial.push(...startUrls);
     if (startUrl) initial.push(startUrl);
     if (url) initial.push(url);
-    if (!initial.length) initial.push(buildStartUrl(category));
+    if (!initial.length) {
+        if (keyword) {
+            initial.push(buildKeywordUrl(keyword, location));
+        } else {
+            initial.push(buildStartUrl(category));
+        }
+    }
 
     const proxyConf = proxyConfiguration
         ? await Actor.createProxyConfiguration({ ...proxyConfiguration })
