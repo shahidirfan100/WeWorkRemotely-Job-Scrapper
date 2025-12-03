@@ -1,0 +1,81 @@
+{
+  "title": "WeWorkRemotely Jobs Scraper",
+  "description": "Extract remote job listings from WeWorkRemotely.com across all categories. Supports custom URLs or category-based scraping with full pagination.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrl": {
+      "title": "Start URL",
+      "type": "string",
+      "description": "Start scraping from a specific WeWorkRemotely URL. If provided, this overrides the category selection.",
+      "editor": "textfield",
+      "example": "https://weworkremotely.com/categories/remote-programming-jobs"
+    },
+    "category": {
+      "title": "Job Category",
+      "type": "string",
+      "description": "Select a job category to scrape from WeWorkRemotely.",
+      "editor": "select",
+      "default": "all-other-remote-jobs",
+      "enum": [
+        "remote-full-stack-programming-jobs",
+        "remote-front-end-programming-jobs",
+        "remote-back-end-programming-jobs",
+        "remote-design-jobs",
+        "remote-devops-sysadmin-jobs",
+        "remote-management-and-finance-jobs",
+        "remote-product-jobs",
+        "remote-customer-support-jobs",
+        "remote-sales-and-marketing-jobs",
+        "all-other-remote-jobs"
+      ],
+      "enumTitles": [
+        "Full-Stack Programming",
+        "Front-End Programming",
+        "Back-End Programming",
+        "Design",
+        "DevOps and SysAdmin",
+        "Management and Finance",
+        "Product",
+        "Customer Support",
+        "Sales and Marketing",
+        "All Other Remote Jobs"
+      ]
+    },
+    "collectDetails": {
+      "title": "Collect job details",
+      "type": "boolean",
+      "description": "Enable to scrape full job descriptions and details from individual job pages. Disable for faster execution with basic info only.",
+      "editor": "checkbox",
+      "default": true
+    },
+    "results_wanted": {
+      "title": "Maximum number of jobs",
+      "type": "integer",
+      "description": "Maximum number of job listings to scrape. Set to a high number to collect all available jobs.",
+      "minimum": 1,
+      "default": 100,
+      "editor": "number"
+    },
+    "max_pages": {
+      "title": "Maximum number of pages",
+      "type": "integer",
+      "description": "Safety limit on the number of listing pages to visit. Prevents excessive scraping.",
+      "minimum": 1,
+      "editor": "number",
+      "default": 20
+    },
+    "proxyConfiguration": {
+      "title": "Proxy configuration",
+      "type": "object",
+      "description": "Configure proxy settings. Residential proxies recommended for reliable access to WeWorkRemotely.",
+      "editor": "proxy",
+      "default": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"]
+      }
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
